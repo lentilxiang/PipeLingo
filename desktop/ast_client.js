@@ -15,6 +15,7 @@ const EV = {
   SessionFinished: 152,
   UsageResponse: 154,
   TaskRequest: 200,
+  UpdateConfig: 201,
   AudioMuted: 250,
   TTSSentenceStart: 350,
   TTSSentenceEnd: 351,
@@ -92,26 +93,31 @@ class AstClient {
       console.log('[ast] startSession voice =', JSON.stringify(voice), '| req =', JSON.stringify(voice.textOnly ? { ...reqParams, mode: 's2t' } : reqParams));
     }
     if (voice.clonedSpeakerId) {
+      // 官方 is_custom_speaker: 默认 false，「是否复刻音色（触发鉴权）」
+      //   - 克隆音色 S_... 必须 true + tts_resource_id=seed-icl-2.0
+      //   - 精品音色（zh_female_vv_uranus_bigtts 等两个公版）/ 不指定音色 → 不传（false/缺省）
       reqParams.speakerId = voice.clonedSpeakerId;
       if (CLONE_MODE === '1') {
-        // 组合1：外接克隆音色 + 显式 seed-icl-2.0 链路
+        // 组合1（默认）：外接克隆音色 + 显式 seed-icl-2.0 链路，触发鉴权
         reqParams.isCustomSpeaker = true;
         reqParams.ttsResourceId = 'seed-icl-2.0';
       } else if (CLONE_MODE === '2') {
-        // 组合2：不触发外接鉴权链路（服务端按已注册音色匹配）
+        // 组合2：不触发鉴权（服务端按已注册音色匹配），is_custom_speaker=false
         reqParams.isCustomSpeaker = false;
       } else {
-        // 组合3：仅传 speaker_id，其余默认（走 seed-tts-2.0 通用复刻链路）
+        // 组合3（.env 当前=3）：走通用复刻链路 seed-tts-2.0，不传 is_custom_speaker
         reqParams.ttsResourceId = 'seed-tts-2.0';
       }
     } else if (voice.speakerId) {
       reqParams.speakerId = voice.speakerId;
     }
+    // 注意：官方 rpcmeta.proto 里 RequestMeta 字段是 PascalCase（SessionID/ConnectionID），
+    // protobufjs 原样保留，写成 sessionID/connectionID 会被静默丢弃，服务端收不到 session_id。
     const req = this.types.T.create({
-      requestMeta: { sessionID: this.sessionId, connectionID: this.connectId },
+      requestMeta: { SessionID: this.sessionId, ConnectionID: this.connectId },
       event: EV.StartSession,
       user: { uid: 'pipelingo', did: 'mac', platform: 'macOS', sdkVersion: '1.0.0' },
-      sourceAudio: { format: 'wav', rate: 16000, bits: 16, channel: 1 },
+      sourceAudio: { format: 'wav', codec: 'raw', rate: 16000, bits: 16, channel: 1 },
       targetAudio: voice.textOnly ? undefined : { format: 'pcm', rate: 24000 },
       request: voice.textOnly ? { ...reqParams, mode: 's2t' } : reqParams,
     });
@@ -122,7 +128,7 @@ class AstClient {
   sendAudio(pcmInt16Buf) {
     if (!this.sessionActive || !this.open) return;
     const req = this.types.T.create({
-      requestMeta: { sessionID: this.sessionId },
+      requestMeta: { SessionID: this.sessionId },
       event: EV.TaskRequest,
       sourceAudio: { binaryData: pcmInt16Buf },
     });
@@ -132,7 +138,7 @@ class AstClient {
   finish() {
     if (!this.open) return;
     const req = this.types.T.create({
-      requestMeta: { sessionID: this.sessionId },
+      requestMeta: { SessionID: this.sessionId },
       event: EV.FinishSession,
     });
     this._send(req);
@@ -165,8 +171,9 @@ class AstClient {
       this.sessionActive = true;
       this.onEvent({ event: 'SessionStarted' });
     } else if (ev === EV.SessionFailed) {
+      // ResponseMeta.Message 同样是 PascalCase，写成 .message 会取到 undefined
       this.onEvent({ event: 'SessionFailed',
-        message: res.responseMeta ? res.responseMeta.message : '' });
+        message: res.responseMeta ? (res.responseMeta.Message || '') : '' });
     } else if (ev === EV.SourceSubtitleStart) {
       this.onEvent({ event: 'SourceStart' });
     } else if (ev === EV.SourceSubtitleResponse) {

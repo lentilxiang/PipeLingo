@@ -148,8 +148,10 @@ app.whenReady().then(() => {
       await astClient.connect();
       astClient.startSession({
         ...voiceOpt,
-        clonedSpeakerId: (voiceOpt && voiceOpt.useClone && ENV.ARK_CLONED_SPEAKER_ID) || null,
-        textOnly: !!(voiceOpt && voiceOpt.useClone && ENV.ARK_CLONED_SPEAKER_ID)
+        // 控制台同款：zhen/zhen 双向自动识别
+        langs: { mode: 's2s', sourceLanguage: 'zhen', targetLanguage: 'zhen' },
+        clonedSpeakerId: ENV.ARK_CLONED_SPEAKER_ID || undefined, // 接口测试：强制使用克隆音色
+        textOnly: false
       });
       return { ok: true };
     } catch (err) {
@@ -180,26 +182,10 @@ app.whenReady().then(() => {
       ast2Client = new AstClient({
         apiKey: ENV.ARK_API_KEY,
         onEvent: (ev) => {
-          // 反向：对方英文 → 中文文本 → 中文TTS → 物理耳机
-          if (ev.event === 'TranslationStart') { ttsSynthDoneForTurn2 = false; }
-          if (ev.event === 'TranslationEnd' && ev.text && !ttsSynthDoneForTurn2) {
-            ttsSynthDoneForTurn2 = true;
-            const mp3Chunks = [];
-            synthStream({
-              apiKey: ENV.ARK_API_KEY,
-              resourceId: revVoice ? 'seed-tts-2.0' : 'seed-icl-2.0',
-              speaker: revVoice || ENV.ARK_CLONED_SPEAKER_ID,
-              text: ev.text,
-              onAudio: (buf) => { mp3Chunks.push(buf); },
-              onDone: () => {
-                const win = BrowserWindow.getAllWindows()[0];
-                if (win && mp3Chunks.length) win.webContents.send('tts2:audio', Buffer.concat(mp3Chunks));
-              },
-              onError: (err) => {
-                const win = BrowserWindow.getAllWindows()[0];
-                if (win) win.webContents.send('ast2:event', { event: 'Error', message: 'TTS2: ' + err.message });
-              }
-            });
+          // 反向 s2s：豆包直接回传中文语音流（复刻对方声音），转发到物理耳机
+          if (ev.event === 'TtsAudio' && ev.audio) {
+            const win = BrowserWindow.getAllWindows()[0];
+            if (win) win.webContents.send('tts2:audio', ev.audio);
           }
           const win = BrowserWindow.getAllWindows()[0];
           if (win) win.webContents.send('ast2:event', ev);
@@ -211,8 +197,8 @@ app.whenReady().then(() => {
       });
       await ast2Client.connect();
       ast2Client.startSession({
-        langs: { mode: 's2t', sourceLanguage: 'en', targetLanguage: 'zh' },
-        textOnly: true
+        langs: { mode: 's2s', sourceLanguage: 'zhen', targetLanguage: 'zhen' },
+        textOnly: false
       });
       return { ok: true };
     } catch (err) {

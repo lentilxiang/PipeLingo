@@ -13,6 +13,7 @@ enum EventType {
   SessionFailed = 153;
   UsageResponse = 154;
   TaskRequest = 200;
+  UpdateConfig = 201;
   AudioMuted = 250;
   TTSSentenceStart = 350;
   TTSSentenceEnd = 351;
@@ -35,11 +36,23 @@ message RequestMeta {
   int32 Sequence = 7;
 }
 
+message BillingItem {
+  string Unit = 1;
+  float Quantity = 2;
+}
+
+message Billing {
+  repeated BillingItem Items = 1;
+  int64 DurationMsec = 2;
+  int64 WordCount = 3;
+}
+
 message ResponseMeta {
   string SessionID = 1;
   int32 Sequence = 2;
   int32 StatusCode = 3;
   string Message = 4;
+  Billing Billing = 5;
 }
 
 message User {
@@ -63,17 +76,39 @@ message Audio {
   bytes binary_data = 14;
 }
 
+// 字段号必须与官方 ast_service.proto / au_base.proto 一致，
+// 否则 wire 上会落到别的字段（例如 is_custom_speaker 曾误写为 5=speech_rate）。
 message Corpus {
   string context = 1;
+  string boosting_table_id = 2;
+  string boosting_table_name = 3;
+  string boosting_id = 4;
+  string nnlm_id = 5;
+  string correct_table_id = 6;
+  string correct_table_name = 7;
+  string punc_hot_words = 8;
   repeated string hot_words_list = 9;
+  map<string, string> glossary_list = 10;
   string correct_words = 11;
+  string regex_correct_table_id = 12;
+  string regex_correct_table_name = 13;
+  string glossary_table_id = 14;
+  string glossary_table_name = 15;
 }
 
+// 官方 ast_service.proto:
+//   5 speech_rate | 6 enable_source_language_detect
+//   7 is_custom_speaker | 8 tts_resource_id
 message ReqParams {
   string mode = 1;
   string source_language = 2;
   string target_language = 3;
   string speaker_id = 4;
+  int32 speech_rate = 5;
+  bool enable_source_language_detect = 6;
+  bool is_custom_speaker = 7;
+  string tts_resource_id = 8;
+  string extra = 80;
   Corpus corpus = 100;
 }
 
@@ -96,4 +131,7 @@ message TranslateResponse {
   int32 end_time = 6;
   bool spk_chg = 7;
   int32 muted_duration_ms = 8;
+  string speaker_id = 9;
+  string detected_language = 10;
+  double language_confidence = 11;
 }

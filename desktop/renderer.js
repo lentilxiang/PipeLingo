@@ -6,7 +6,7 @@ const outSelect = document.getElementById('outSelect');
 const inMeter = document.getElementById('inMeter');
 const outMeter = document.getElementById('homeOutMeter');
 const homeOutMeter = document.getElementById('homeOutMeter');
-const subs = document.getElementById('subs');
+const subs = null; // 字幕功能已移除
 const micDiagBtn = document.getElementById('micDiagBtn'); // 已移除，保留兼容
 const revInMeter = document.getElementById('revInMeter');
 const revOutMeter = document.getElementById('homeRevOutMeter');
@@ -157,12 +157,7 @@ setInterval(() => {
 async function startInterpretation() {
   // 1. 请求主进程连接豆包并 StartSession
   statusEl.textContent = '连接豆包中…';
-  const voiceSel = document.getElementById('voice').value;
-  const voiceOpt =
-    voiceSel.includes('克隆') ? { useClone: true } :
-    voiceSel.includes('女') ? { speakerId: 'zh_female_vv_uranus_bigtts' } :
-    voiceSel.includes('男') ? { speakerId: 'zh_male_jingqiangkanye_emo_mars_bigtts' } :
-    { speakerId: 'zh_female_vv_uranus_bigtts' }; // 默认标准女声
+  const voiceOpt = buildVoiceOpt();
   const res = await window.ast.start(voiceOpt);
   if (!res.ok) {
     statusEl.textContent = '连接失败';
@@ -312,55 +307,67 @@ window.ast.onEvent((ev) => {
 // ---------- 播放 TTS PCM（24kHz float32）→ 系统默认输出（耳机） ----------
 function playTtsPcm(buf) {
   if (!playCtx) playCtx = new AudioContext({ sampleRate: 24000 });
-  // 路由到选定的输出设备（BlackHole = 虚拟声卡；空 = 系统默认）
-  if (outSelect.value && playCtx.setSinkId) {
-    playCtx.setSinkId(outSelect.value).catch(err => appendToast('输出设备切换失败: ' + err.message));
-  }
   const bytes = new Uint8Array(buf);
-  const floats = new Float32Array(bytes.length / 4);
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const floats = new Float32Array(bytes.byteLength >> 2);
   for (let i = 0; i < floats.length; i++) floats[i] = dv.getFloat32(i * 4, true);
-  const audioBuf = playCtx.createBuffer(1, floats.length, 24000);
-  audioBuf.getChannelData(0).set(floats);
-  const src = playCtx.createBufferSource();
-  src.buffer = audioBuf;
-  src.connect(playCtx.destination);
-  const now = playCtx.currentTime;
-  if (nextPlayTime < now) nextPlayTime = now;
-  src.start(nextPlayTime);
-  nextPlayTime += audioBuf.duration;
+  if (!floats.length) return;
+
+  const selfMonitor = document.getElementById('selfMonitor').checked;
+  // 主输出：选定的输出设备（BlackHole = 虚拟声卡给会议；空 = 系统默认）
+  const mainSink = outSelect.value;
+  // 本地监听：勾选时，把同一份英文语音再拷到「物理耳机/系统默认」，让自己也听到
+  const monSink = (selfMonitor && mainSink) ? '' : mainSink;
+
+  const schedule = (sinkId, floats) => {
+    let ctx;
+    if (sinkId) {
+      if (!playCtx.setSinkId) return;
+      ctx = playCtx;
+      ctx.setSinkId(sinkId).catch(e => appendToast('输出设备切换失败: ' + e.message));
+    } else {
+      // 监听用独立 AudioContext 指向系统默认输出（物理耳机），与 BlackHole 互不干扰
+      if (!window.__monCtx) window.__monCtx = new AudioContext({ sampleRate: 24000 });
+      ctx = window.__monCtx;
+      if (ctx.setSinkId) ctx.setSinkId('').catch(() => {});
+    }
+    const audioBuf = ctx.createBuffer(1, floats.length, 24000);
+    audioBuf.getChannelData(0).set(floats);
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(ctx.destination);
+    const now = ctx.currentTime;
+    if (ctx.__next === undefined || ctx.__next < now) ctx.__next = now;
+    src.start(ctx.__next);
+    ctx.__next += audioBuf.duration;
+  };
+
+  // 主输出一路
+  schedule(mainSink, floats);
+  // 监听路（勾选 selfMonitor 且主输出是 BlackHole 时，额外一路到物理耳机）
+  if (selfMonitor && mainSink) schedule('', floats);
 }
 
 // ---------- 独立 TTS（克隆音色）：播放 mp3 → 默认输出/BlackHole ----------
-window.ttsAudio.onAudio((mp3buf) => {
-  // MP3 整句播放（已验证可用路径）
-  const b = new Uint8Array(mp3buf);
-  let bin = '';
-  for (let i = 0; i < b.length; i += 0x8000)
-    bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
-  const url = 'data:audio/mpeg;base64,' + btoa(bin);
-
-  const playTo = (sinkId) => {
-    const a = new Audio(url);
-    if (sinkId && a.setSinkId) a.setSinkId(sinkId).catch(() => {});
-    a.onerror = () => appendToast('TTS 播放失败: bytes=' + b.length);
-    forwardPlayingCount++;
-    a.onended = () => { forwardPlayingCount = Math.max(0, forwardPlayingCount - 1); };
-    a.play().catch(e => { appendToast('TTS 播放失败: ' + e.message); forwardPlayingCount = Math.max(0, forwardPlayingCount - 1); });
-  };
-
+window.ttsAudio.onAudio((pcmBuf) => {
+  // 上行英文语音流：PCM 24kHz float32（豆包 s2s）
+  console.log('[tts-up] chunk bytes =', pcmBuf.byteLength || pcmBuf.length);
+  const bytes = new Uint8Array(pcmBuf);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const n = bytes.byteLength >> 2;
+  const floats = new Float32Array(n);
+  for (let i = 0; i < n; i++) floats[i] = dv.getFloat32(i*4, true);
   const selfMonitor = document.getElementById('selfMonitor').checked;
   if (outSelect.value) {
-    playTo(outSelect.value);            // 主输出：虚拟声卡（给会议）
+    playPcmTo(outSelect.value, floats);            // 主输出：2ch 给会议
     if (selfMonitor) {
-      // 监听必须走真实物理输出（排除 BlackHole 等），否则会二次进虚拟声卡造成重复
       navigator.mediaDevices.enumerateDevices().then(devs => {
         const phys = devs.find(d => d.kind === 'audiooutput' && !/blackhole|cable|virtual|default/i.test(d.label));
-        playTo(phys ? phys.deviceId : '');
+        if (phys) playPcmTo(phys.deviceId, floats); // 监听：物理耳机
       });
     }
   } else {
-    playTo('');
+    playPcmTo('', floats);
   }
 });
 
@@ -490,91 +497,18 @@ window.ast2.onEvent((ev) => {
 });
 
 // 中文 TTS 回放 → 系统默认输出（物理耳机），不进 BlackHole
-window.tts2Audio.onAudio((mp3buf) => {
-  const b = new Uint8Array(mp3buf);
-  let bin = '';
-  for (let i = 0; i < b.length; i += 0x8000)
-    bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
-  const a = new Audio('data:audio/mpeg;base64,' + btoa(bin));
-  if (a.setSinkId) a.setSinkId('').catch(() => {});
-  revOutMeter.style.width = '80%';
-  const hro = document.getElementById('homeRevOutMeter'); if (hro) hro.style.width = '80%';
-  a.onended = () => { revOutMeter.style.width = '0%'; if (hro) hro.style.width = '0%'; };
-  a.play().catch(e => appendToast('中文回放失败: ' + e.message));
+window.tts2Audio.onAudio((pcmBuf) => {
+  // 下行中文语音流：PCM 24kHz float32（豆包 s2s），固定路由物理耳机
+  const bytes = new Uint8Array(pcmBuf);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const n = bytes.byteLength >> 2;
+  const floats = new Float32Array(n);
+  for (let i = 0; i < n; i++) floats[i] = dv.getFloat32(i*4, true);
+  navigator.mediaDevices.enumerateDevices().then(devs => {
+    const phys = devs.find(d => d.kind === 'audiooutput' && !/blackhole|cable|virtual|default/i.test(d.label));
+    playPcmTo(phys ? phys.deviceId : '', floats);
+  });
 });
-
-function appendToast(msg) {
-  const div = document.createElement('div');
-  div.className = 'turn pending';
-  div.innerHTML = `<div class="idx">⚠️</div><div class="line zh"><div class="text"></div></div>`;
-  div.querySelector('.text').textContent = msg;
-  div.style.userSelect = 'text';
-  div.style.webkitUserSelect = 'text';
-  div.title = '双击复制错误信息';
-  div.addEventListener('dblclick', () => navigator.clipboard.writeText(msg).catch(() => {}));
-  console.error('[PipeLingo][error]', msg);
-  subs.appendChild(div);
-  subs.scrollTop = subs.scrollHeight;
-}
-
-startBtn.addEventListener('click', () => (running ? stopInterpretation() : startInterpretation()));
-
-// ---------- 录制10秒 → 训练专属克隆音色 ----------
-const cloneBtn = document.getElementById('cloneBtn');
-let recording = false;
-
-if (cloneBtn) cloneBtn.addEventListener('click', async () => {
-  if (recording) return;
-  if (!mediaStream || !audioCtx) { alert('请先等麦克风就绪'); return; }
-  recording = true;
-  const origText = cloneBtn.textContent;
-  const chunks = [];
-  const tmpAnalyser = audioCtx.createAnalyser();
-  audioCtx.createMediaStreamSource(mediaStream).connect(tmpAnalyser);
-  const buf = new Float32Array(tmpAnalyser.fftSize);
-  const collectedMax = audioCtx.sampleRate * 10;
-  let collected = 0;
-
-  for (let sec = 10; sec > 0; sec--) {
-    cloneBtn.textContent = `🎙️ 请持续说话… ${sec}s`;
-    const secSamples = audioCtx.sampleRate;
-    let got = 0;
-    while (got < secSamples && collected < collectedMax) {
-      tmpAnalyser.getFloatTimeDomainData(buf);
-      chunks.push(new Float32Array(buf));
-      got += buf.length;
-      collected += buf.length;
-      await new Promise(r => setTimeout(r, Math.max(10, 1000 * buf.length / audioCtx.sampleRate - 10)));
-    }
-  }
-  cloneBtn.textContent = '⏳ 上传训练中…';
-
-  // 拼 PCM → WAV(16k, mono, 16bit)
-  const all = new Float32Array(collected);
-  let off = 0;
-  for (const c of chunks) {
-    const n = Math.min(c.length, collected - off);
-    all.set(c.subarray(0, n), off);
-    off += n;
-  }
-  const i16 = new Int16Array(all.length);
-  for (let i = 0; i < all.length; i++) {
-    const s = Math.max(-1, Math.min(1, all[i]));
-    i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-  }
-  const wav = encodeWav(i16, audioCtx.sampleRate);
-  const b64 = arrayBufferToBase64(wav);
-
-  const res = await window.ast.cloneTrain({ audioBase64: b64, format: 'wav', language: 0 });
-  recording = false;
-  cloneBtn.textContent = origText;
-  if (res.ok) {
-    alert('✅ 克隆音色训练成功！以后"我的声音（复刻）"将使用这个高像度专属音色。\n\n音色ID: ' + res.speakerId);
-  } else {
-    alert('❌ 训练失败: ' + res.error);
-  }
-});
-
 function encodeWav(samples, sampleRate) {
   const buf = new ArrayBuffer(44 + samples.length * 2);
   const v = new DataView(buf);
@@ -608,7 +542,8 @@ let turnSeq = 0;
  * @param {string} zhText 中文原文（可先给占位文本，后续 updateTurn 更新）
  * @returns {number} turnId，用于后续更新译文
  */
-function newTurn(zhText = '（识别中…）', dir = 'fwd') {
+function newTurn(zhText = '', dir = 'fwd') { return null; /* 字幕功能已移除 */ }
+function _newTurnDisabled(zhText = '', dir = 'fwd') {
   turnSeq += 1;
   const div = document.createElement('div');
   div.className = 'turn pending';
@@ -626,8 +561,7 @@ function newTurn(zhText = '（识别中…）', dir = 'fwd') {
   div.querySelector('.line.' + srcCls + ' .text').textContent = zhText;
   // 新发言追加到底部（对话习惯：越晚越往下），并自动滚到底
   subs.appendChild(div);
-  while (subs.children.length > 200) subs.removeChild(subs.firstChild);
-  subs.scrollTop = subs.scrollHeight;
+
   return turnSeq;
 }
 
@@ -637,16 +571,16 @@ function newTurn(zhText = '（识别中…）', dir = 'fwd') {
  * @param {{zh?: string, en?: string}} patch 要更新的字段
  * @param {boolean} done 是否已完成（去掉"翻译中"样式）
  */
-function updateTurn(turnId, patch = {}, done = false) {
-  const div = subs.querySelector(`.turn[data-turn-id="${turnId}"]`);
-  if (!div) return;
+function updateTurn(turnId, patch = {}, done = false) { return; /* 已禁用 */ }
+function _updateTurnDisabled(turnId, patch = {}, done = false) {
+  return; // 已禁用
   const rev = div.dataset.dir === 'rev';
   const srcSel = rev ? '.line.en .text' : '.line.zh .text';
   const dstSel = rev ? '.line.zh .text' : '.line.en .text';
   if (patch.zh !== undefined) div.querySelector(srcSel).textContent = patch.zh;
   if (patch.en !== undefined) div.querySelector(dstSel).textContent = patch.en;
   if (done) div.classList.remove('pending');
-  subs.scrollTop = subs.scrollHeight;
+  if (subs) subs.scrollTop = subs.scrollHeight;
 }
 
 // 暴露给 Step 3 使用
@@ -678,6 +612,7 @@ function playPcmStream(floats, sampleRate = 24000) {
     streamCtx = new AudioContext({ sampleRate });
     streamNextTime = 0;
   }
+  if (!floats.length) { console.warn('[pcm] skip empty chunk'); return; }
   const audioBuf = streamCtx.createBuffer(1, floats.length, sampleRate);
   audioBuf.getChannelData(0).set(floats);
 
@@ -685,7 +620,7 @@ function playPcmStream(floats, sampleRate = 24000) {
     const src = ctx.createBufferSource();
     src.buffer = audioBuf;
     src.connect(ctx.destination);
-    if (sinkId && ctx.setSinkId) ctx.setSinkId(sinkId).catch(() => {});
+    if (sinkId && ctx.setSinkId) ctx.setSinkId(sinkId).catch(e => console.warn('[tts-up] setSinkId failed:', e.message));
     const now = ctx.currentTime;
     if (ctx.__nextTime === undefined || ctx.__nextTime < now + 0.05) ctx.__nextTime = now + 0.05;
     src.start(ctx.__nextTime);
@@ -710,6 +645,25 @@ document.getElementById('openSettings').addEventListener('click', () => settings
 document.getElementById('closeSettings').addEventListener('click', () => settingsMask.classList.remove('open'));
 document.getElementById('saveSettings').addEventListener('click', () => settingsMask.classList.remove('open'));
 settingsMask.addEventListener('click', (e) => { if (e.target === settingsMask) settingsMask.classList.remove('open'); });
+
+// ---------- 音色选项 → AST 参数 ----------
+function buildVoiceOpt() {
+  const voiceSel = document.getElementById('voice').value;
+  return voiceSel.includes('男') ? { speakerId: 'zh_male_jingqiangkanye_emo_mars_bigtts' } :
+         { speakerId: 'zh_female_vv_uranus_bigtts' }; // AST 协议原生支持的两个精品音色
+}
+
+// 运行中切换音色：自动重启会话使新音色立即生效
+document.getElementById('voice').addEventListener('change', async (e) => {
+  console.log('[voice] 上行音色切换为:', e.target.value, '| running =', running);
+  refreshStrip();
+  if (!running) { appendToast('音色已保存，下次开始同传生效'); return; }
+  window.ast.stop();
+  await new Promise(r => setTimeout(r, 300));   // 等旧连接完全关闭
+  const res = await window.ast.start(buildVoiceOpt());
+  if (!res.ok) appendToast('音色切换失败: ' + res.error);
+  else { statusEl.textContent = '音色已切换'; console.log('[voice] 会话已用新音色重建'); }
+});
 
 // ---------- 主页状态条同步 ----------
 function refreshStrip() {
@@ -737,5 +691,32 @@ document.getElementById('bidirect').addEventListener('change', (e) => {
 });
 refreshStrip();
 // 开始/停止时同步
+startBtn.addEventListener('click', () => (running ? stopInterpretation() : startInterpretation()));
 startBtn.addEventListener('click', () => setTimeout(refreshStrip, 100));
 setInterval(refreshStrip, 1000);   // 状态条每秒刷新
+
+// ---------- PCM 语音流播放（24k float32）----------
+const pcmCtxs = {};
+function playPcmTo(sinkId, floats) {
+  if (!floats.length) return; // 跳过空音频块
+  console.log('[tts-up] play to sink =', sinkId || 'default', 'samples =', floats.length);
+  let pk=0; for (let i=0;i<floats.length;i++) pk=Math.max(pk,Math.abs(floats[i]));
+  console.log('[tts-up] peak =', pk.toFixed(4));
+  const key = sinkId || '__default__';
+  if (!pcmCtxs[key]) pcmCtxs[key] = new AudioContext({ sampleRate: 24000 });
+  const ctx = pcmCtxs[key];
+  const audioBuf = ctx.createBuffer(1, floats.length, 24000);
+  audioBuf.getChannelData(0).set(floats);
+  const src = ctx.createBufferSource();
+  src.buffer = audioBuf;
+  src.connect(ctx.destination);
+  if (sinkId && ctx.setSinkId) ctx.setSinkId(sinkId).catch(e => console.warn('[tts-up] setSinkId failed:', e.message));
+  const now = ctx.currentTime;
+  if (ctx.__next === undefined || ctx.__next < now + 0.05) ctx.__next = now + 0.05;
+  src.start(ctx.__next);
+  ctx.__next += audioBuf.duration;
+}
+
+function appendToast(msg) {
+  console.error('[PipeLingo][toast]', msg);
+}
