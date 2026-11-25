@@ -6,7 +6,7 @@ const TTS_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse'
  * 独立流式 TTS（seed-icl-2.0 克隆音色）
  */
 async function synthStream(opts) {
-  const { apiKey, speaker, text, onAudio, onDone, onError } = opts;
+  const { apiKey, speaker, text, onAudio, onDone, onError, resourceId = 'seed-icl-2.0' } = opts;
   try {
     const resp = await fetch(TTS_URL, {
       method: 'POST',
@@ -14,7 +14,7 @@ async function synthStream(opts) {
         'Content-Type': 'application/json',
         'Accept': 'text/event-stream',
         'X-Api-Key': apiKey,
-        'X-Api-Resource-Id': 'seed-icl-2.0',
+        'X-Api-Resource-Id': resourceId,
         'X-Api-Request-Id': crypto.randomUUID(),
       },
       body: JSON.stringify({

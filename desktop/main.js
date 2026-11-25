@@ -21,6 +21,9 @@ const ENV = loadEnv();
 let astClient = null;
 let ttsSession = null;
 let ttsLastText = '';
+let ast2Client = null;
+let ttsSynthDoneForTurn = false;
+let ttsSynthDoneForTurn2 = false;
 
 function startCloneTts() {
   ttsSession = new BidirectTTS({
@@ -157,6 +160,62 @@ app.whenReady().then(() => {
 
   ipcMain.on('ast:audio', (_ev, pcmBuf) => {
     if (astClient) astClient.sendAudio(Buffer.from(pcmBuf));
+  });
+
+  ipcMain.handle('ast2:stop', async () => {
+    if (ast2Client) { ast2Client.close(); ast2Client = null; }
+    return { ok: true };
+  });
+
+  ipcMain.on('ast2:audio', (_ev, pcmBuf) => {
+    if (ast2Client) ast2Client.sendAudio(Buffer.from(pcmBuf));
+  });
+
+  ipcMain.handle('ast2:start', async (_e, opts) => {
+    if (!ENV.ARK_API_KEY) return { ok: false, error: '缺少 ARK_API_KEY' };
+    try {
+      ast2Client = new AstClient({
+        apiKey: ENV.ARK_API_KEY,
+        onEvent: (ev) => {
+          // 反向：对方英文 → 中文文本 → 中文TTS → 物理耳机
+          if (ev.event === 'TranslationStart') { ttsSynthDoneForTurn2 = false; }
+          if (ev.event === 'TranslationEnd' && ev.text && !ttsSynthDoneForTurn2) {
+            ttsSynthDoneForTurn2 = true;
+            const mp3Chunks = [];
+            synthStream({
+              apiKey: ENV.ARK_API_KEY,
+              resourceId: 'seed-icl-2.0',
+              speaker: ENV.ARK_CLONED_SPEAKER_ID,
+              text: ev.text,
+              onAudio: (buf) => { mp3Chunks.push(buf); },
+              onDone: () => {
+                const win = BrowserWindow.getAllWindows()[0];
+                if (win && mp3Chunks.length) win.webContents.send('tts2:audio', Buffer.concat(mp3Chunks));
+              },
+              onError: (err) => {
+                const win = BrowserWindow.getAllWindows()[0];
+                if (win) win.webContents.send('ast2:event', { event: 'Error', message: 'TTS2: ' + err.message });
+              }
+            });
+          }
+          const win = BrowserWindow.getAllWindows()[0];
+          if (win) win.webContents.send('ast2:event', ev);
+        },
+        onError: (err) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (win) win.webContents.send('ast2:event', { event: 'Error', message: err.message });
+        }
+      });
+      await ast2Client.connect();
+      ast2Client.startSession({
+        langs: { mode: 's2t', sourceLanguage: 'en', targetLanguage: 'zh' },
+        textOnly: true
+      });
+      return { ok: true };
+    } catch (err) {
+      ast2Client = null;
+      return { ok: false, error: err.message };
+    }
   });
 
   ipcMain.handle('ast:stop', async () => {

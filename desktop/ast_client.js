@@ -87,7 +87,10 @@ class AstClient {
    * @param {string} [voice.speakerId] 指定精品音色
    */
   startSession(voice = {}) {
-    const reqParams = { mode: 's2s', sourceLanguage: 'zh', targetLanguage: 'en' };
+    const reqParams = voice.langs || { mode: 's2s', sourceLanguage: 'zh', targetLanguage: 'en' };
+    if (process.env.ARK_TTS_DEBUG) {
+      console.log('[ast] startSession voice =', JSON.stringify(voice), '| req =', JSON.stringify(voice.textOnly ? { ...reqParams, mode: 's2t' } : reqParams));
+    }
     if (voice.clonedSpeakerId) {
       reqParams.speakerId = voice.clonedSpeakerId;
       if (CLONE_MODE === '1') {
