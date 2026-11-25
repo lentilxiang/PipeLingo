@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob: data:; style-src 'self' 'unsafe-inline'" />
+  <title>PipeLingo</title>
+  <style>
+    :root {
+      --bg: #101418;
+      --panel: #1a2028;
+      --panel-2: #212a34;
+      --text: #e8eef4;
+      --muted: #8a97a5;
+      --accent: #4f8cff;
+      --green: #35c282;
+      --red: #ff5d5d;
+      --radius: 14px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .titlebar {
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px 0 88px; /* space for traffic lights */
+      -webkit-app-region: drag;
+    }
+    .titlebar h1 { font-size: 15px; font-weight: 600; }
+    .titlebar .status {
+      font-size: 12px;
+      color: var(--muted);
+      -webkit-app-region: no-drag;
+    }
+    .wrap { padding: 10px 22px 22px; display: flex; flex-direction: column; gap: 14px; height: calc(100vh - 44px); }
+    .card {
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+    }
+    .devices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      letter-spacing: .3px;
+    }
+    select {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid #2e3947;
+      border-radius: 9px;
+      padding: 9px 12px;
+      font-size: 13px;
+      outline: none;
+      -webkit-appearance: none;
+    }
+    .meters { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+    .meter-label { font-size: 12px; color: var(--muted); width: 44px; }
+    .meter {
+      flex: 1; height: 8px; background: var(--panel-2);
+      border-radius: 99px; overflow: hidden;
+    }
+    .meter i {
+      display: block; height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--green), #ffd166 70%, var(--red));
+      border-radius: 99px;
+      transition: width .05s linear;
+    }
+    .subs {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+    .turn {
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .line .lang { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .line .text { font-size: 15px; line-height: 1.5; }
+    .line.zh .text { color: #cfd8e3; }
+    .line.en .text { color: var(--accent); font-weight: 500; }
+    .turn.pending .line.en .text { color: var(--muted); font-style: italic; }
+    .turn .idx {
+      font-size: 11px;
+      color: var(--muted);
+      align-self: flex-start;
+      background: var(--panel-2);
+      padding: 2px 8px;
+      border-radius: 99px;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .voice, .mode { flex: 1; }
+    button.primary {
+      -webkit-app-region: no-drag;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 13px 34px;
+      cursor: pointer;
+    }
+    button.primary:hover { filter: brightness(1.1); }
+    button.primary.stop { background: var(--red); }
+    .hint { font-size: 12px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="titlebar">
+    <h1>PipeLingo</h1>
+    <span class="status" id="status">未开始</span>
+  </div>
+
+  <div class="wrap">
+    <!-- 设备选择 + 电平 -->
+    <div class="card devices">
+      <div class="field">
+        <label>麦克风</label>
+        <select id="micSelect"></select>
+        <div class="meters">
+          <span class="meter-label">输入</span>
+          <div class="meter"><i id="inMeter"></i></div>
+        </div>
+      </div>
+      <div class="field">
+        <label>输出设备（选 BlackHole 2ch = 送入虚拟声卡）</label>
+        <select id="outSelect">
+          <option value="">系统默认输出（耳机/扬声器）</option>
+        </select>
+        <label style="display:flex; align-items:center; gap:6px; margin-top:8px; font-size:12px; color:var(--muted);">
+          <input type="checkbox" id="selfMonitor" checked /> 同时在本机监听翻译声音
+        </label>
+        <div class="meters">
+          <span class="meter-label">输出</span>
+          <div class="meter"><i id="outMeter"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 实时字幕 -->
+    <div class="subs" id="subs">
+      <div class="turn pending">
+        <div class="idx">等待开始…</div>
+        <div class="line zh"><div class="lang">原文 · 中文</div><div class="text">开始同传后，每句话会出现在这里。</div></div>
+        <div class="line en"><div class="lang">译文 · English</div><div class="text">Interpretation will be paired sentence by sentence.</div></div>
+      </div>
+    </div>
+
+    <!-- 控制 -->
+    <div class="card controls">
+      <div class="field voice">
+        <label>音色</label>
+        <select id="voice" style="margin-bottom:8px;">
+          <option>我的声音（克隆）</option>
+          <option>标准女声</option>
+          <option>标准男声</option>
+        </select>
+      </div>
+      <div class="field mode">
+        <label>延迟模式</label>
+        <select id="mode">
+          <option>均衡（推荐）</option>
+          <option>极速</option>
+          <option>高质量</option>
+        </select>
+      </div>
+      <button class="primary" id="startBtn">开始同传</button>
+    </div>
+    <div class="hint">Step 3 接入豆包同传后，译文音频将从系统默认输出播放，方便你试听。</div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
