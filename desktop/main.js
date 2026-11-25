@@ -173,6 +173,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle('ast2:start', async (_e, opts) => {
     if (!ENV.ARK_API_KEY) return { ok: false, error: '缺少 ARK_API_KEY' };
+    const revVoice = opts && opts.voice === '标准女声' ? 'zh_female_vv_uranus_bigtts'
+                  : opts && opts.voice === '标准男声' ? 'zh_male_jingqiangkanye_emo_mars_bigtts'
+                  : null; // null = 用克隆音色（seed-icl-2.0）
     try {
       ast2Client = new AstClient({
         apiKey: ENV.ARK_API_KEY,
@@ -184,8 +187,8 @@ app.whenReady().then(() => {
             const mp3Chunks = [];
             synthStream({
               apiKey: ENV.ARK_API_KEY,
-              resourceId: 'seed-icl-2.0',
-              speaker: ENV.ARK_CLONED_SPEAKER_ID,
+              resourceId: revVoice ? 'seed-tts-2.0' : 'seed-icl-2.0',
+              speaker: revVoice || ENV.ARK_CLONED_SPEAKER_ID,
               text: ev.text,
               onAudio: (buf) => { mp3Chunks.push(buf); },
               onDone: () => {

@@ -4,7 +4,7 @@ const startBtn = document.getElementById('startBtn');
 const micSelect = document.getElementById('micSelect');
 const outSelect = document.getElementById('outSelect');
 const inMeter = document.getElementById('inMeter');
-const outMeter = document.getElementById('outMeter');
+const outMeter = document.getElementById('homeOutMeter');
 const homeOutMeter = document.getElementById('homeOutMeter');
 const subs = document.getElementById('subs');
 const micDiagBtn = document.getElementById('micDiagBtn');
@@ -149,9 +149,8 @@ let outLevel = 0;
 setInterval(() => {
   // 只在真的有英文音频播放时跳动（而不是整个运行期间乱闪）
   outLevel = (running && forwardPlayingCount > 0) ? 0.25 + Math.random() * 0.3 : 0;
-  outMeter.style.width = `${outLevel * 100}%`;
-  if (homeOutMeter) homeOutMeter.style.width = outMeter.style.width;
-  const ho = document.getElementById('homeOutMeter'); if (ho) ho.style.width = outMeter.style.width;
+  if (outMeter) outMeter.style.width = `${outLevel * 100}%`;
+  if (homeOutMeter) homeOutMeter.style.width = `${outLevel * 100}%`;
 }, 120);
 
 // ---------- 开始 / 停止 ----------
@@ -179,6 +178,7 @@ async function startInterpretation() {
   if (!document.getElementById('uplinkEnabled').checked) {
     appendToast('上行线路已关闭：你的声音不会发送给对方');
   }
+  // 下行由开关常驻控制；若开关已勾但还没启动（如应用刚打开就点了开始），这里兜底启动
   if (document.getElementById('bidirect').checked) startReverseSession();
 }
 
@@ -368,6 +368,8 @@ let revTurnId = null;
 let revAnalyser = null;
 let revMeterRaf = null;
 
+function drawRevMeterOnly() { /* 电平由 drawRevMeter 持续刷新，无需额外处理 */ }
+
 function drawRevMeter() {
   if (!revAnalyser) return;
   const buf = new Float32Array(revAnalyser.fftSize);
@@ -382,6 +384,7 @@ let forwardPlayingCount = 0;   // 正向TTS正在播放的音频数量（>0 时�
 let lastForwardEn = '';        // 最近一次发给对方的英文（用于字幕级去重）
 
 async function startReverseSession() {
+  if (revStream) return; // 已在运行
   // 找 BlackHole 输入设备
   const devs = await navigator.mediaDevices.enumerateDevices();
   // 优先用独立的 BlackHole 16ch（专门接收会议对方声音，避免与正向TTS同设备导致回环）
@@ -391,8 +394,6 @@ async function startReverseSession() {
   if (!/16/i.test(bh.label)) {
     appendToast('⚠️ 建议安装 BlackHole 16ch 作为反向采集专用设备（brew install --cask blackhole-16ch），否则可能与正向英文互相串音');
   }
-  const res = await window.ast2.start();
-  if (!res.ok) { appendToast('双向翻译启动失败: ' + res.error); return; }
   try {
     revStream = await navigator.mediaDevices.getUserMedia({
       audio: { deviceId: bh.deviceId, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -430,6 +431,7 @@ async function startReverseSession() {
     revWorklet = new AudioWorkletNode(revCtx, 'pcm-tap2');
     revWorklet.port.onmessage = (e) => {
       if (forwardPlayingCount > 0) return;   // 正在播自己的英文，忽略反向输入防回环
+      if (!running) { drawRevMeterOnly(); return; }   // 未开始同传：只监控电平，不送云端
       const f = e.data;
       const i16 = new Int16Array(f.length);
       for (let i = 0; i < f.length; i++) {
@@ -590,8 +592,9 @@ function arrayBufferToBase64(buf) {
   return btoa(bin);
 }
 
-// 应用启动即常驻监控电平
+// 应用启动即常驻监控电平（上行麦克风 + 下行 BlackHole）
 startMetering();
+startReverseSession();   // 只要设备在，下行采集与电平就常驻（是否送云端由"开始同传"决定）
 
 // ---------- 对话列表：一句原文 + 一句译文 成对显示 ----------
 let turnSeq = 0;
@@ -721,6 +724,15 @@ function refreshStrip() {
 ['uplinkEnabled','bidirect','voice'].forEach(id => {
   const el = document.getElementById(id);
   el && el.addEventListener('change', refreshStrip);
+});
+
+// 下行线路开关：勾选即常驻采集（电平实时闪，同麦克风监控），与"开始同传"无关
+document.getElementById('bidirect').addEventListener('change', (e) => {
+  if (e.target.checked) startReverseSession();
+  else {
+    window.ast2.stop();
+    stopReverseCapture();
+  }
 });
 refreshStrip();
 // 开始/停止时同步
