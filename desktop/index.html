@@ -179,7 +179,6 @@
     <div class="card status-strip" id="statusStrip">
       <span id="stripUp" class="chip">⬆️ 上行</span>
       <span id="stripDown" class="chip">⬇️ 下行</span>
-      <span id="stripVoice" class="chip">🎙️ 我的克隆声音</span>
       <button class="primary" id="startBtn" style="margin-left:auto; padding:8px 22px; font-size:13px;">▶ 开始同传</button>
       <button class="settings-btn" id="openSettings" style="margin-left:0;">⚙️ 设置</button>
     </div>
@@ -254,9 +253,7 @@
           </div>
           <div style="display:flex; flex-direction:column; gap:6px;">
             <label style="font-size:12px; color:var(--muted);">音色（中文合成用）</label>
-            <select id="voice2">
-              <option>标准女声</option>
-              <option>标准男声</option>
+            <select id="voice2" disabled>
               <option>我的声音（克隆）</option>
             </select>
           </div>

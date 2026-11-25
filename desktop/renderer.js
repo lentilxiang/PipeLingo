@@ -178,8 +178,12 @@ async function startInterpretation() {
   if (!document.getElementById('uplinkEnabled').checked) {
     appendToast('上行线路已关闭：你的声音不会发送给对方');
   }
-  // 下行由开关常驻控制；若开关已勾但还没启动（如应用刚打开就点了开始），这里兜底启动
-  if (document.getElementById('bidirect').checked) startReverseSession();
+  // 下行：本地采集常驻（应用启动即有）；点开始同传时若勾选启用，则建立云端翻译会话
+  if (document.getElementById('bidirect').checked) {
+    startReverseSession();
+    const res = await window.ast2.start({ voice: document.getElementById('voice2').value });
+    if (!res.ok) appendToast('双向翻译云端会话启动失败: ' + res.error);
+  }
 }
 
 function stopInterpretation() {
@@ -711,15 +715,12 @@ settingsMask.addEventListener('click', (e) => { if (e.target === settingsMask) s
 function refreshStrip() {
   const stripUp = document.getElementById('stripUp');
   const stripDown = document.getElementById('stripDown');
-  const stripVoice = document.getElementById('stripVoice');
   const up = document.getElementById('uplinkEnabled').checked;
   const down = document.getElementById('bidirect').checked;
-  const voice = document.getElementById('voice').value;
   stripUp.classList.toggle('on', running && up);
   stripUp.textContent = (running && up) ? '⬆️ 上行 · 工作中' : '⬆️ 上行 · ' + (up ? '待启动' : '已关闭');
   stripDown.classList.toggle('on', running && down);
   stripDown.textContent = (running && down) ? '⬇️ 下行 · 工作中' : '⬇️ 下行 · ' + (down ? '待启动' : '已关闭');
-  stripVoice.textContent = '🎙️ ' + voice;
 }
 ['uplinkEnabled','bidirect','voice'].forEach(id => {
   const el = document.getElementById(id);
@@ -737,3 +738,4 @@ document.getElementById('bidirect').addEventListener('change', (e) => {
 refreshStrip();
 // 开始/停止时同步
 startBtn.addEventListener('click', () => setTimeout(refreshStrip, 100));
+setInterval(refreshStrip, 1000);   // 状态条每秒刷新
