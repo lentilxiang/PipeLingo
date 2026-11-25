@@ -7,7 +7,7 @@ const inMeter = document.getElementById('inMeter');
 const outMeter = document.getElementById('homeOutMeter');
 const homeOutMeter = document.getElementById('homeOutMeter');
 const subs = document.getElementById('subs');
-const micDiagBtn = document.getElementById('micDiagBtn');
+const micDiagBtn = document.getElementById('micDiagBtn'); // 已移除，保留兼容
 const revInMeter = document.getElementById('revInMeter');
 const revOutMeter = document.getElementById('homeRevOutMeter');
 
